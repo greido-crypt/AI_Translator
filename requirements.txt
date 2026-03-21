@@ -1,0 +1,9 @@
+﻿transformers
+datasets==2.19.2
+sentencepiece
+sacremoses
+sacrebleu
+evaluate
+torch
+customtkinter
+langdetect

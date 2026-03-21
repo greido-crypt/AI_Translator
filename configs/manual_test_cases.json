@@ -1,0 +1,122 @@
+[
+  {
+    "src": "The frontend sends an HTTP request to the backend API.",
+    "reference": "Фронтенд отправляет HTTP-запрос в бэкенд API."
+  },
+  {
+    "src": "If the request contains invalid parameters, the server returns status code 400.",
+    "reference": "Если запрос содержит неверные параметры, сервер возвращает код состояния 400."
+  },
+  {
+    "src": "The logging module stores authentication failures and timeout errors.",
+    "reference": "Модуль логирования сохраняет ошибки аутентификации и ошибки тайм-аута."
+  },
+  {
+    "src": "To improve performance, the system caches frequently requested data.",
+    "reference": "Чтобы повысить производительность, система кэширует часто запрашиваемые данные."
+  },
+  {
+    "src": "The service retries the connection three times before raising an exception.",
+    "reference": "Сервис повторяет подключение три раза перед тем, как выбросить исключение."
+  },
+  {
+    "src": "Use `pip install -r requirements.txt` to install project dependencies.",
+    "reference": "Используйте `pip install -r requirements.txt`, чтобы установить зависимости проекта."
+  },
+  {
+    "src": "Run `python src/train.py` to start fine-tuning on the local dataset.",
+    "reference": "Запустите `python src/train.py`, чтобы начать дообучение на локальном датасете."
+  },
+  {
+    "src": "The parser validates the input before execution.",
+    "reference": "Парсер проверяет входные данные перед выполнением."
+  },
+  {
+    "src": "Store secrets in environment variables instead of hardcoding API keys.",
+    "reference": "Храните секреты в переменных окружения вместо жёсткого прописывания API-ключей."
+  },
+  {
+    "src": "The migration script updates the schema without downtime.",
+    "reference": "Скрипт миграции обновляет схему без простоя."
+  },
+  {
+    "src": "The endpoint `/v1/users/{id}` returns user metadata in JSON format.",
+    "reference": "Эндпоинт `/v1/users/{id}` возвращает метаданные пользователя в формате JSON."
+  },
+  {
+    "src": "The CI pipeline runs unit tests, lint checks, and security scans.",
+    "reference": "CI-пайплайн запускает модульные тесты, проверки линтера и сканирование безопасности."
+  },
+  {
+    "src": "Set `learning_rate` to 2e-5 and `num_train_epochs` to 3 in train_config.json.",
+    "reference": "Установите `learning_rate` на 2e-5 и `num_train_epochs` на 3 в train_config.json."
+  },
+  {
+    "src": "The handler catches ValueError and returns a structured error response.",
+    "reference": "Обработчик перехватывает ValueError и возвращает структурированный ответ об ошибке."
+  },
+  {
+    "src": "Enable GPU acceleration if CUDA is available.",
+    "reference": "Включите ускорение на GPU, если доступна CUDA."
+  },
+  {
+    "src": "The database query uses an index to avoid a full table scan.",
+    "reference": "Запрос к базе данных использует индекс, чтобы избежать полного сканирования таблицы."
+  },
+  {
+    "src": "Do not log passwords, tokens, or personal data.",
+    "reference": "Не логируйте пароли, токены или персональные данные."
+  },
+  {
+    "src": "The YAML config defines host, port, and retry policy.",
+    "reference": "YAML-конфигурация задаёт host, port и политику повторов."
+  },
+  {
+    "src": "Use exponential backoff for unstable network calls.",
+    "reference": "Используйте экспоненциальный backoff для нестабильных сетевых вызовов."
+  },
+  {
+    "src": "The model was fine-tuned on a technical parallel corpus.",
+    "reference": "Модель была дообучена на техническом параллельном корпусе."
+  },
+  {
+    "src": "```python\nresponse = client.get('/health')\nassert response.status_code == 200\n```",
+    "reference": "```python\nresponse = client.get('/health')\nassert response.status_code == 200\n```"
+  },
+  {
+    "src": "Inline code like `model.generate()` should remain unchanged.",
+    "reference": "Inline code вроде `model.generate()` должен оставаться без изменений."
+  },
+  {
+    "src": "Configuration file path: C:\\\\projects\\\\mt\\\\configs\\\\train_config.json",
+    "reference": "Путь к файлу конфигурации: C:\\\\projects\\\\mt\\\\configs\\\\train_config.json"
+  },
+  {
+    "src": "CLI example: `$ curl -X POST https://api.example.com/v1/login`",
+    "reference": "Пример CLI: `$ curl -X POST https://api.example.com/v1/login`"
+  },
+  {
+    "src": "JSON example: {\"name\": \"service\", \"enabled\": true, \"timeout\": 30}",
+    "reference": "Пример JSON: {\"name\": \"service\", \"enabled\": true, \"timeout\": 30}"
+  },
+  {
+    "src": "XML payload: <request><id>42</id><status>ok</status></request>",
+    "reference": "XML-полезная нагрузка: <request><id>42</id><status>ok</status></request>"
+  },
+  {
+    "src": "The application uses a client-server architecture and separates concerns between layers.",
+    "reference": "Приложение использует клиент-серверную архитектуру и разделяет ответственность между слоями."
+  },
+  {
+    "src": "When memory usage spikes, the process may be killed by the OS.",
+    "reference": "Когда потребление памяти резко растёт, процесс может быть завершён ОС."
+  },
+  {
+    "src": "Graceful shutdown ensures active requests finish before termination.",
+    "reference": "Корректное завершение гарантирует, что активные запросы завершатся до остановки."
+  },
+  {
+    "src": "This approach makes the system more reliable, scalable, and easier to maintain.",
+    "reference": "Этот подход делает систему более надёжной, масштабируемой и более простой в сопровождении."
+  }
+]
