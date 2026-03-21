@@ -1,28 +1,59 @@
 ﻿# EN->RU Technical MT Baseline + GUI
 
-Minimal reproducible coursework project for technical machine translation with CLI scripts and a modern desktop GUI.
+Minimal reproducible coursework project for technical machine translation (English -> Russian) with CLI scripts and a desktop GUI.
 
-## Core MT Setup
+## What Is Included
 
-- Base model: `Helsinki-NLP/opus-mt-en-ru`
-- Optional fine-tuned checkpoint: `./outputs/checkpoints/final`
-- Default EN-RU dataset for training/eval config: `opus100` (`en-ru`)
-- Training pipeline supports technical subset filtering via keywords (see `configs/train_config.json`)
+- baseline model: `Helsinki-NLP/opus-mt-en-ru`
+- fine-tuning pipeline (`transformers` + `datasets` + `torch`)
+- baseline/final evaluation scripts
+- GUI for technical text translation with report panel
+- technical token protection for code/CLI/paths/JSON/XML
+
+## Dataset and Config
+
+- default dataset in config: `opus100` (`en-ru`)
+- main config: `configs/train_config.json`
+- extended configs:
+  - `configs/train_config_synth8000.json`
+  - `configs/train_high_accuracy.json`
 
 ## Metrics
 
 - BLEU
 - chrF
-- terminology accuracy (technical term preservation on references)
-- Average generated length (`gen_len`)
+- terminology preservation score
+- code preservation score
+- formatting preservation score
 
-## Install
+## Installation
 
 ```bash
 pip install -r requirements.txt
 ```
 
-## CLI Baseline Workflow
+## Download Fine-Tuned Model (Yandex.Disk)
+
+Model weights are stored outside GitHub due size limits.
+
+1. Download model files from Yandex.Disk: `<PASTE_YOUR_YANDEX_LINK_HERE>`
+2. Place them into `./outputs/checkpoints/final`
+3. Required files:
+   - `config.json`
+   - `generation_config.json`
+   - `tokenizer_config.json`
+   - `vocab.json`
+   - `source.spm`
+   - `target.spm`
+   - `model.safetensors`
+
+Quick check:
+
+```bash
+python src/inference.py --text "The parser validates the input before execution." --model_path ./outputs/checkpoints/final
+```
+
+## CLI Usage
 
 Baseline evaluation:
 
@@ -43,38 +74,34 @@ python src/inference.py --text "The parser validates the input before execution.
 python src/inference.py --text "The compiler throws an exception if the config file is missing." --model_path ./outputs/checkpoints/final
 ```
 
-## GUI App
+## GUI Usage
 
-Run GUI:
+Run:
 
 ```bash
 python src/gui_app.py
 ```
 
-Implemented GUI features:
+GUI includes:
 
-- dark/light theme
-- large source and translation panels
-- technical-text-aware preprocessing (markdown, code blocks, inline code, CLI lines, paths, JSON/XML)
+- dark/light themes
+- translation modes: `fast`, `balanced`, `high_quality`
 - language auto-detection
-- automatic model routing
-- chunking for long texts
-- full inference report
-- translation history
-- copy/save/export actions
-- interface language switch (EN/RU)
-- modes: `fast` / `balanced` / `high_quality`
+- model auto-routing
+- long-text chunking
+- history, copy/save/export actions
+- detailed inference report
 
-Backend modules:
+## Project Structure
 
-- `src/language_detector.py`
-- `src/text_analyzer.py`
-- `src/model_router.py`
-- `src/translator_service.py`
-- `src/report_builder.py`
-- `src/history_manager.py`
+```text
+configs/   # training and synthetic-data configs
+src/       # pipeline, GUI, and service modules
+outputs/   # runtime outputs (ignored in git, except .gitkeep)
+```
 
-## Config
+## Notes for GitHub
 
-- Main training config: `configs/train_config.json`
-- For larger fine-tuning: increase sample sizes and keep `use_technical_filter=true`
+- model files are not stored in repository
+- checkpoints and runtime artifacts are ignored by `.gitignore`
+- share model via Yandex.Disk link in this README
