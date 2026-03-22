@@ -28,6 +28,7 @@ class TechnicalTranslatorApp(ctk.CTk):
             "translation": "Translation Panel",
             "report": "Report Panel",
             "history": "History Panel",
+            "clear_history": "Clear History",
             "settings": "Settings Panel",
             "controls": "Control Panel",
             "target_lang": "Target Language",
@@ -35,6 +36,7 @@ class TechnicalTranslatorApp(ctk.CTk):
             "theme": "Theme",
             "ui_lang": "UI Language",
             "chunk_size": "Chunk Size",
+            "chunk_hint": "700-1200: code-heavy text | 1400: default | 1600-2000: long prose",
             "placeholder": "Paste technical text here...",
             "ready": "Ready",
             "translating": "Translating...",
@@ -49,6 +51,7 @@ class TechnicalTranslatorApp(ctk.CTk):
             "translation": "Панель перевода",
             "report": "Панель отчёта",
             "history": "Панель истории",
+            "clear_history": "Удалить историю",
             "settings": "Панель настроек",
             "controls": "Панель управления",
             "target_lang": "Целевой язык",
@@ -56,6 +59,7 @@ class TechnicalTranslatorApp(ctk.CTk):
             "theme": "Тема",
             "ui_lang": "Язык интерфейса",
             "chunk_size": "Размер чанка",
+            "chunk_hint": "700-1200: много кода | 1400: по умолчанию | 1600-2000: длинная проза",
             "placeholder": "Вставьте технический текст...",
             "ready": "Готово",
             "translating": "Перевод...",
@@ -86,6 +90,15 @@ class TechnicalTranslatorApp(ctk.CTk):
 
         self.last_report = {}
         self.last_translation = ""
+        self._status_anim_job = None
+        self._status_anim_step = 0
+        self._typing_anim_job = None
+        self._typing_target_text = ""
+        self._typing_index = 0
+        self._report_flash_job = None
+        self._report_flash_step = 0
+        self._translation_flash_job = None
+        self._translation_flash_step = 0
 
         self._build_layout()
         self._apply_localization()
@@ -108,6 +121,10 @@ class TechnicalTranslatorApp(ctk.CTk):
 
         self.status_label = ctk.CTkLabel(self.header, text="Ready", font=ctk.CTkFont(size=14))
         self.status_label.grid(row=0, column=1, padx=18, pady=14, sticky="e")
+
+        self.progress_bar = ctk.CTkProgressBar(self.header, mode="indeterminate", height=6)
+        self.progress_bar.grid(row=1, column=0, columnspan=2, sticky="ew", padx=18, pady=(0, 12))
+        self.progress_bar.grid_remove()
 
         self.main = ctk.CTkFrame(self, fg_color="transparent")
         self.main.grid(row=1, column=0, sticky="nsew", padx=16, pady=(0, 16))
@@ -193,6 +210,14 @@ class TechnicalTranslatorApp(ctk.CTk):
         self.history_label = ctk.CTkLabel(self.right_bottom, text="History Panel", font=ctk.CTkFont(size=16, weight="bold"))
         self.history_label.grid(row=2, column=0, sticky="w", padx=14, pady=(0, 6))
 
+        self.clear_history_button = ctk.CTkButton(
+            self.right_bottom,
+            text="Clear History",
+            command=self._clear_history,
+            width=130,
+        )
+        self.clear_history_button.grid(row=2, column=0, sticky="e", padx=14, pady=(0, 6))
+
         self.history_text = ctk.CTkTextbox(self.right_bottom, corner_radius=12, font=ctk.CTkFont(size=12), height=150)
         self.history_text.grid(row=3, column=0, sticky="nsew", padx=14, pady=(0, 10))
 
@@ -225,14 +250,27 @@ class TechnicalTranslatorApp(ctk.CTk):
 
         self.chunk_label = ctk.CTkLabel(self.settings_frame, text="Chunk Size")
         self.chunk_label.grid(row=2, column=0, sticky="w", padx=8, pady=(0, 4))
+        self.chunk_value_label = ctk.CTkLabel(self.settings_frame, text="1400")
+        self.chunk_value_label.grid(row=2, column=1, sticky="e", padx=8, pady=(0, 4))
         self.chunk_slider = ctk.CTkSlider(
             self.settings_frame,
             from_=700,
             to=3000,
             number_of_steps=23,
             variable=self.chunk_size_var,
+            command=self._on_chunk_size_changed,
         )
         self.chunk_slider.grid(row=3, column=0, columnspan=2, sticky="ew", padx=8, pady=(0, 8))
+
+        self.chunk_hint_label = ctk.CTkLabel(
+            self.settings_frame,
+            text="700-1200: code-heavy text | 1400: default | 1600-2000: long prose",
+            font=ctk.CTkFont(size=11),
+            text_color=("gray35", "gray70"),
+            wraplength=320,
+            justify="left",
+        )
+        self.chunk_hint_label.grid(row=4, column=0, columnspan=2, sticky="w", padx=8, pady=(0, 8))
 
         self.source_text.insert("1.0", self._t("placeholder"))
 
@@ -252,18 +290,47 @@ class TechnicalTranslatorApp(ctk.CTk):
         self.theme_label.configure(text=self._t("theme"))
         self.ui_lang_label.configure(text=self._t("ui_lang"))
         self.chunk_label.configure(text=self._t("chunk_size"))
+        self.chunk_hint_label.configure(text=self._t("chunk_hint"))
         self.translate_button.configure(text=self._t("translate"))
         self.copy_button.configure(text=self._t("copy"))
         self.save_button.configure(text=self._t("save"))
         self.export_button.configure(text=self._t("export"))
+        self.clear_history_button.configure(text=self._t("clear_history"))
         self.status_label.configure(text=self._t("ready"))
+        self.chunk_value_label.configure(text=str(int(self.chunk_size_var.get())))
 
     def _on_theme_changed(self, value: str):
         ctk.set_appearance_mode(value)
 
+    def _on_chunk_size_changed(self, value: float):
+        self.chunk_value_label.configure(text=str(int(value)))
+
     def _set_busy(self, busy: bool):
         self.translate_button.configure(state="disabled" if busy else "normal")
-        self.status_label.configure(text=self._t("translating") if busy else self._t("ready"))
+        if busy:
+            self.progress_bar.grid()
+            self.progress_bar.start()
+            self._start_status_animation()
+        else:
+            self.progress_bar.stop()
+            self.progress_bar.grid_remove()
+            self._stop_status_animation()
+            self.status_label.configure(text=self._t("ready"))
+
+    def _start_status_animation(self):
+        self._status_anim_step = 0
+        self._animate_status()
+
+    def _stop_status_animation(self):
+        if self._status_anim_job is not None:
+            self.after_cancel(self._status_anim_job)
+            self._status_anim_job = None
+
+    def _animate_status(self):
+        dots = "." * (self._status_anim_step % 4)
+        self.status_label.configure(text=f"{self._t('translating')}{dots}")
+        self._status_anim_step += 1
+        self._status_anim_job = self.after(280, self._animate_status)
 
     def _start_translate(self):
         source = self.source_text.get("1.0", "end").strip()
@@ -311,11 +378,70 @@ class TechnicalTranslatorApp(ctk.CTk):
             self.after(0, lambda: self._set_busy(False))
 
     def _apply_results(self, translation: str, report_text: str):
-        self.translation_text.delete("1.0", "end")
-        self.translation_text.insert("1.0", translation)
+        self._animate_translation_text(translation)
+        self._flash_translation_panel()
 
         self.report_text.delete("1.0", "end")
         self.report_text.insert("1.0", report_text)
+        self._flash_report_panel()
+
+    def _animate_translation_text(self, translation: str):
+        if self._typing_anim_job is not None:
+            self.after_cancel(self._typing_anim_job)
+            self._typing_anim_job = None
+        self._typing_target_text = translation
+        self._typing_index = 0
+        self.translation_text.delete("1.0", "end")
+        self._typing_step()
+
+    def _typing_step(self):
+        step = 28
+        next_idx = min(len(self._typing_target_text), self._typing_index + step)
+        if next_idx > self._typing_index:
+            chunk = self._typing_target_text[self._typing_index : next_idx]
+            self.translation_text.insert("end", chunk)
+            self.translation_text.see("end")
+            self._typing_index = next_idx
+        if self._typing_index < len(self._typing_target_text):
+            self._typing_anim_job = self.after(14, self._typing_step)
+        else:
+            self._typing_anim_job = None
+
+    def _flash_report_panel(self):
+        if self._report_flash_job is not None:
+            self.after_cancel(self._report_flash_job)
+            self._report_flash_job = None
+        self._report_flash_step = 0
+        self._animate_report_flash()
+
+    def _animate_report_flash(self):
+        # Short highlight after translation completes.
+        colors = ["#2f6f5e", "#2a6154", "#26574c", "#235046", "#214a41", "transparent"]
+        idx = min(self._report_flash_step, len(colors) - 1)
+        self.left_bottom.configure(fg_color=colors[idx])
+        self._report_flash_step += 1
+        if self._report_flash_step < len(colors):
+            self._report_flash_job = self.after(80, self._animate_report_flash)
+        else:
+            self._report_flash_job = None
+
+    def _flash_translation_panel(self):
+        if self._translation_flash_job is not None:
+            self.after_cancel(self._translation_flash_job)
+            self._translation_flash_job = None
+        self._translation_flash_step = 0
+        self._animate_translation_flash()
+
+    def _animate_translation_flash(self):
+        # Short highlight for updated translation output.
+        colors = ["#2f5f9e", "#2a588f", "#25507f", "#224a74", "#1f4368", "transparent"]
+        idx = min(self._translation_flash_step, len(colors) - 1)
+        self.right_top.configure(fg_color=colors[idx])
+        self._translation_flash_step += 1
+        if self._translation_flash_step < len(colors):
+            self._translation_flash_job = self.after(80, self._animate_translation_flash)
+        else:
+            self._translation_flash_job = None
 
     def _copy_result(self):
         text = self.translation_text.get("1.0", "end").strip()
@@ -364,6 +490,14 @@ class TechnicalTranslatorApp(ctk.CTk):
                 "-" * 60
             )
         self.history_text.insert("1.0", "\n".join(lines))
+
+    def _clear_history(self):
+        title = "Confirm" if self.ui_lang.get() == "en" else "Подтверждение"
+        prompt = "Delete translation history?" if self.ui_lang.get() == "en" else "Удалить историю переводов?"
+        if not messagebox.askyesno(title, prompt):
+            return
+        self.history_manager.clear()
+        self._refresh_history()
 
 
 def main():

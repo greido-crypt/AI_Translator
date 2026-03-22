@@ -40,3 +40,7 @@ class HistoryManager:
         history = history[: self.max_items]
         save_json(history, str(self.history_path))
         return history
+
+    def clear(self) -> None:
+        if self.history_path.exists():
+            self.history_path.unlink()
