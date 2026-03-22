@@ -37,6 +37,15 @@ temp/
 # Project outputs (metrics, reports, generated samples, history)
 outputs/*
 !outputs/.gitkeep
+!outputs/checkpoints/
+outputs/checkpoints/*
+!outputs/checkpoints/final/
+!outputs/checkpoints/final/config.json
+!outputs/checkpoints/final/generation_config.json
+!outputs/checkpoints/final/tokenizer_config.json
+!outputs/checkpoints/final/vocab.json
+!outputs/checkpoints/final/source.spm
+!outputs/checkpoints/final/target.spm
 
 # Large model checkpoints and training artifacts
 checkpoints/
@@ -49,3 +58,13 @@ checkpoints/
 
 # Local docs/drafts
 *.docx
+
+# Allow publishing tokenizer/config files for the final checkpoint (without weights)
+!outputs/checkpoints/
+!outputs/checkpoints/final/
+!outputs/checkpoints/final/config.json
+!outputs/checkpoints/final/generation_config.json
+!outputs/checkpoints/final/tokenizer_config.json
+!outputs/checkpoints/final/vocab.json
+!outputs/checkpoints/final/source.spm
+!outputs/checkpoints/final/target.spm
