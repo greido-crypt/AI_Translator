@@ -32,10 +32,40 @@ class ModelRouter:
         analysis: TextAnalysis,
         ui_target_lang: str,
         quality_mode: str,
+        manual_model_mode: str = "auto",
+        manual_model_path: str = "",
     ) -> ModelSelection:
         source_lang = detection.language if detection.language in {"en", "ru"} else "en"
         target_lang = self._resolve_target_lang(source_lang, ui_target_lang)
         inference_mode = self._resolve_inference_mode(quality_mode, analysis)
+
+        manual_mode = (manual_model_mode or "auto").strip().lower()
+        manual_path = (manual_model_path or "").strip()
+        if manual_mode == "baseline":
+            model_name = self._baseline_model_for_direction(source_lang, target_lang)
+            reason = f"Manual model selection: baseline model selected for {source_lang}->{target_lang}."
+            return ModelSelection(
+                source_lang=source_lang,
+                target_lang=target_lang,
+                model_name=model_name,
+                reason=reason,
+                inference_mode=inference_mode,
+            )
+        if manual_mode == "local_path" and manual_path:
+            path = Path(manual_path)
+            if path.exists() and (path / "config.json").exists():
+                model_name = str(path)
+                reason = f"Manual model selection: local checkpoint selected: {path}"
+            else:
+                model_name = manual_path
+                reason = f"Manual model selection: model id/path selected: {manual_path}"
+            return ModelSelection(
+                source_lang=source_lang,
+                target_lang=target_lang,
+                model_name=model_name,
+                reason=reason,
+                inference_mode=inference_mode,
+            )
 
         if source_lang == "en" and target_lang == "ru":
             model_name, reason = self._choose_en_ru_model(analysis, quality_mode)
@@ -87,6 +117,13 @@ class ModelRouter:
             "Helsinki-NLP/opus-mt-en-ru",
             "Selected baseline EN->RU Marian model for stable technical translation quality.",
         )
+
+    def _baseline_model_for_direction(self, source_lang: str, target_lang: str) -> str:
+        if source_lang == "ru" and target_lang == "en":
+            return "Helsinki-NLP/opus-mt-ru-en"
+        if source_lang == target_lang:
+            return "identity"
+        return "Helsinki-NLP/opus-mt-en-ru"
 
     def _resolve_inference_mode(self, requested_mode: str, analysis: TextAnalysis) -> str:
         if requested_mode != "balanced":

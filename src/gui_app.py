@@ -1,6 +1,7 @@
 ﻿from __future__ import annotations
 
 import json
+import os
 import threading
 from pathlib import Path
 from tkinter import filedialog, messagebox
@@ -37,6 +38,9 @@ class TechnicalTranslatorApp(ctk.CTk):
             "ui_lang": "UI Language",
             "chunk_size": "Chunk Size",
             "chunk_hint": "700-1200: code-heavy text | 1400: default | 1600-2000: long prose",
+            "model_select": "Model Selection",
+            "model_path": "Local Model Path",
+            "browse": "Browse...",
             "placeholder": "Paste technical text here...",
             "ready": "Ready",
             "translating": "Translating...",
@@ -60,6 +64,9 @@ class TechnicalTranslatorApp(ctk.CTk):
             "ui_lang": "Язык интерфейса",
             "chunk_size": "Размер чанка",
             "chunk_hint": "700-1200: много кода | 1400: по умолчанию | 1600-2000: длинная проза",
+            "model_select": "Выбор модели",
+            "model_path": "Путь к локальной модели",
+            "browse": "Обзор...",
             "placeholder": "Вставьте технический текст...",
             "ready": "Готово",
             "translating": "Перевод...",
@@ -68,6 +75,7 @@ class TechnicalTranslatorApp(ctk.CTk):
 
     def __init__(self):
         super().__init__()
+        self.project_root = Path(__file__).resolve().parent.parent
         self.title("Technical MT Studio")
         self.geometry("1450x920")
         self.minsize(1200, 800)
@@ -87,6 +95,8 @@ class TechnicalTranslatorApp(ctk.CTk):
         self.mode_var = ctk.StringVar(value="balanced")
         self.theme_var = ctk.StringVar(value="Dark")
         self.chunk_size_var = ctk.IntVar(value=1400)
+        self.model_choice_var = ctk.StringVar(value="auto")
+        self.manual_model_path_var = ctk.StringVar(value="./outputs/checkpoints/final")
 
         self.last_report = {}
         self.last_translation = ""
@@ -171,7 +181,7 @@ class TechnicalTranslatorApp(ctk.CTk):
         self.right_bottom = ctk.CTkFrame(self.main, corner_radius=16)
         self.right_bottom.grid(row=1, column=1, sticky="nsew", padx=(8, 0), pady=(8, 0))
         self.right_bottom.grid_columnconfigure(0, weight=1)
-        self.right_bottom.grid_rowconfigure(1, weight=1)
+        self.right_bottom.grid_rowconfigure(1, weight=0)
         self.right_bottom.grid_rowconfigure(3, weight=1)
 
         self.controls_label = ctk.CTkLabel(self.right_bottom, text="Control Panel", font=ctk.CTkFont(size=16, weight="bold"))
@@ -196,16 +206,16 @@ class TechnicalTranslatorApp(ctk.CTk):
         self.mode_menu.grid(row=1, column=1, padx=8, pady=(0, 8), sticky="ew")
 
         self.translate_button = ctk.CTkButton(self.controls_frame, text="Translate", command=self._start_translate)
-        self.translate_button.grid(row=2, column=0, padx=8, pady=8, sticky="ew")
+        self.translate_button.grid(row=2, column=0, columnspan=2, padx=8, pady=(8, 6), sticky="ew")
 
         self.copy_button = ctk.CTkButton(self.controls_frame, text="Copy Result", command=self._copy_result)
-        self.copy_button.grid(row=2, column=1, padx=8, pady=8, sticky="ew")
+        self.copy_button.grid(row=3, column=0, columnspan=2, padx=8, pady=(0, 6), sticky="ew")
 
         self.save_button = ctk.CTkButton(self.controls_frame, text="Save Translation", command=self._save_translation)
-        self.save_button.grid(row=3, column=0, padx=8, pady=(0, 8), sticky="ew")
+        self.save_button.grid(row=4, column=0, columnspan=2, padx=8, pady=(0, 6), sticky="ew")
 
         self.export_button = ctk.CTkButton(self.controls_frame, text="Export Report", command=self._export_report)
-        self.export_button.grid(row=3, column=1, padx=8, pady=(0, 8), sticky="ew")
+        self.export_button.grid(row=5, column=0, columnspan=2, padx=8, pady=(0, 8), sticky="ew")
 
         self.history_label = ctk.CTkLabel(self.right_bottom, text="History Panel", font=ctk.CTkFont(size=16, weight="bold"))
         self.history_label.grid(row=2, column=0, sticky="w", padx=14, pady=(0, 6))
@@ -272,6 +282,35 @@ class TechnicalTranslatorApp(ctk.CTk):
         )
         self.chunk_hint_label.grid(row=4, column=0, columnspan=2, sticky="w", padx=8, pady=(0, 8))
 
+        self.model_select_label = ctk.CTkLabel(self.settings_frame, text="Model Selection")
+        self.model_select_label.grid(row=5, column=0, sticky="w", padx=8, pady=(0, 4))
+        self.model_select_menu = ctk.CTkOptionMenu(
+            self.settings_frame,
+            values=["auto", "baseline", "local_path"],
+            variable=self.model_choice_var,
+            command=self._on_model_choice_changed,
+        )
+        self.model_select_menu.grid(row=5, column=1, sticky="ew", padx=8, pady=(0, 4))
+
+        self.model_path_label = ctk.CTkLabel(self.settings_frame, text="Local Model Path")
+        self.model_path_label.grid(row=6, column=0, sticky="w", padx=8, pady=(0, 4))
+        self.model_path_entry = ctk.CTkEntry(
+            self.settings_frame,
+            textvariable=self.manual_model_path_var,
+            placeholder_text="./outputs/checkpoints/final",
+        )
+        self.model_path_entry.grid(row=6, column=1, sticky="ew", padx=8, pady=(0, 4))
+
+        self.model_browse_button = ctk.CTkButton(
+            self.settings_frame,
+            text="Browse...",
+            command=self._browse_model_path,
+            width=110,
+        )
+        self.model_browse_button.grid(row=7, column=1, sticky="e", padx=8, pady=(0, 8))
+
+        self._on_model_choice_changed(self.model_choice_var.get())
+
         self.source_text.insert("1.0", self._t("placeholder"))
 
     def _t(self, key: str) -> str:
@@ -291,6 +330,9 @@ class TechnicalTranslatorApp(ctk.CTk):
         self.ui_lang_label.configure(text=self._t("ui_lang"))
         self.chunk_label.configure(text=self._t("chunk_size"))
         self.chunk_hint_label.configure(text=self._t("chunk_hint"))
+        self.model_select_label.configure(text=self._t("model_select"))
+        self.model_path_label.configure(text=self._t("model_path"))
+        self.model_browse_button.configure(text=self._t("browse"))
         self.translate_button.configure(text=self._t("translate"))
         self.copy_button.configure(text=self._t("copy"))
         self.save_button.configure(text=self._t("save"))
@@ -304,6 +346,26 @@ class TechnicalTranslatorApp(ctk.CTk):
 
     def _on_chunk_size_changed(self, value: float):
         self.chunk_value_label.configure(text=str(int(value)))
+
+    def _on_model_choice_changed(self, value: str):
+        if value == "local_path":
+            self.model_path_entry.configure(state="normal")
+            self.model_browse_button.configure(state="normal")
+        else:
+            self.model_path_entry.configure(state="disabled")
+            self.model_browse_button.configure(state="disabled")
+
+    def _browse_model_path(self):
+        path = filedialog.askdirectory(initialdir=str(self.project_root))
+        if not path:
+            return
+        selected = Path(path)
+        try:
+            rel = selected.resolve().relative_to(self.project_root.resolve())
+            normalized = rel.as_posix()
+        except Exception:
+            normalized = str(selected)
+        self.manual_model_path_var.set(normalized)
 
     def _set_busy(self, busy: bool):
         self.translate_button.configure(state="disabled" if busy else "normal")
@@ -337,9 +399,40 @@ class TechnicalTranslatorApp(ctk.CTk):
         if not source:
             messagebox.showwarning("Warning", "Source text is empty.")
             return
+        if self.model_choice_var.get() == "local_path":
+            model_path = self.manual_model_path_var.get().strip()
+            if not model_path:
+                messagebox.showwarning("Warning", "Local model path is empty.")
+                return
+            missing = self._missing_model_files(model_path)
+            if missing:
+                joined = ", ".join(missing)
+                messagebox.showerror(
+                    "Model Path Error",
+                    f"Selected model directory is incomplete.\nMissing files: {joined}",
+                )
+                return
 
         self._set_busy(True)
         threading.Thread(target=self._translate_worker, args=(source,), daemon=True).start()
+
+    def _missing_model_files(self, model_path: str):
+        required = [
+            "config.json",
+            "tokenizer_config.json",
+            "vocab.json",
+            "source.spm",
+            "target.spm",
+        ]
+        p = Path(model_path)
+        if not p.is_absolute():
+            p = (self.project_root / p).resolve()
+        if not p.exists() or not p.is_dir():
+            return required
+        missing = [name for name in required if not (p / name).exists()]
+        if not ((p / "model.safetensors").exists() or (p / "pytorch_model.bin").exists()):
+            missing.append("model.safetensors|pytorch_model.bin")
+        return missing
 
     def _translate_worker(self, source: str):
         try:
@@ -350,6 +443,8 @@ class TechnicalTranslatorApp(ctk.CTk):
                 analysis=analysis,
                 ui_target_lang=self.target_lang_var.get(),
                 quality_mode=self.mode_var.get(),
+                manual_model_mode=self.model_choice_var.get(),
+                manual_model_path=self.manual_model_path_var.get(),
             )
             runtime = self.translator.translate(
                 text=source,
@@ -373,7 +468,8 @@ class TechnicalTranslatorApp(ctk.CTk):
             self.after(0, lambda: self._apply_results(runtime.translated_text, report_text))
             self.after(0, self._refresh_history)
         except Exception as exc:
-            self.after(0, lambda: messagebox.showerror("Translation Error", str(exc)))
+            err_text = str(exc)
+            self.after(0, lambda msg=err_text: messagebox.showerror("Translation Error", msg))
         finally:
             self.after(0, lambda: self._set_busy(False))
 
@@ -501,6 +597,8 @@ class TechnicalTranslatorApp(ctk.CTk):
 
 
 def main():
+    project_root = Path(__file__).resolve().parent.parent
+    os.chdir(project_root)
     ensure_dir("outputs")
     app = TechnicalTranslatorApp()
     app.mainloop()

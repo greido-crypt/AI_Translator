@@ -34,6 +34,12 @@ class TranslatorService:
     MARKDOWN_HEADER_RE = re.compile(r"(?m)^#{1,6}\s.*$")
     CODE_BLOCK_RE = re.compile(r"```[\s\S]*?```")
     INLINE_CODE_RE = re.compile(r"`[^`\n]+`")
+    INLINE_JSON_RE = re.compile(r"`\s*\{[^`\n]*\}\s*`")
+    INLINE_XML_RE = re.compile(r"`\s*<[^`\n]+>\s*`")
+    CLI_INLINE_RE = re.compile(
+        r"(?:(?:\$\s*)?(?:python|pip|curl|git|docker|kubectl)\s+[^\n`]*?)(?=(?:\.\s|$))",
+        re.IGNORECASE,
+    )
     CLI_LINE_RE = re.compile(r"(?m)^\s*(?:\$|>|#)\s+.+$")
     PATH_RE = re.compile(r"(?:[A-Za-z]:\\[^\s]+|/(?:[\w.-]+/)+[\w.-]+|\./[\w./-]+)")
     FILE_NAME_RE = re.compile(r"\b[\w.-]+\.(?:json|yaml|yml|xml|toml|ini|cfg|py|md|txt|csv)\b", re.IGNORECASE)
@@ -161,6 +167,7 @@ class TranslatorService:
         (r"\bс API-шлюз\b", "с API-шлюзом"),
         (r"\bсохраняя команды исполняемыми в действии\b", "сохраняя команды исполняемыми"),
         (r"\bПроверьте перед перепроверкой\b", "Перед повторной попыткой выполните проверки"),
+        (r"###\s*деплой\s*Notes\b", "### Заметки по деплою"),
     ]
     SOURCE_GUIDED_RULES = [
         {
@@ -219,6 +226,7 @@ class TranslatorService:
     ]
 
     def __init__(self) -> None:
+        self.project_root = Path(__file__).resolve().parent.parent
         self._model_cache: Dict[str, Tuple[AutoTokenizer, AutoModelForSeq2SeqLM, torch.device]] = {}
         self.external_en_ru_glossary = self._load_external_glossary()
 
@@ -335,19 +343,44 @@ class TranslatorService:
         )
 
     def _get_model_bundle(self, model_name: str):
-        if model_name in self._model_cache:
-            return self._model_cache[model_name]
+        resolved_model_name = model_name
+        local_path = Path(model_name)
+        if not local_path.is_absolute():
+            candidate = (self.project_root / local_path)
+            if candidate.exists():
+                try:
+                    rel = candidate.resolve().relative_to(self.project_root.resolve())
+                    resolved_model_name = rel.as_posix()
+                except Exception:
+                    # Fallback: keep user-provided relative path.
+                    resolved_model_name = model_name
+        elif local_path.exists():
+            # Absolute paths with non-ASCII symbols may fail in HF path parser on Windows.
+            # Prefer project-relative paths when possible.
+            try:
+                rel = local_path.resolve().relative_to(self.project_root.resolve())
+                resolved_model_name = rel.as_posix()
+            except Exception:
+                resolved_model_name = str(local_path)
+        elif any(sep in model_name for sep in ("/", "\\")) and not model_name.startswith("Helsinki-NLP/"):
+            raise FileNotFoundError(
+                f"Model path does not exist or is not accessible: {model_name}. "
+                "Use a valid local directory with config/tokenizer/model files."
+            )
 
-        tokenizer = AutoTokenizer.from_pretrained(model_name)
-        model = AutoModelForSeq2SeqLM.from_pretrained(model_name)
+        if resolved_model_name in self._model_cache:
+            return self._model_cache[resolved_model_name]
+
+        tokenizer = AutoTokenizer.from_pretrained(resolved_model_name)
+        model = AutoModelForSeq2SeqLM.from_pretrained(resolved_model_name)
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         model.to(device)
         model.eval()
-        self._model_cache[model_name] = (tokenizer, model, device)
+        self._model_cache[resolved_model_name] = (tokenizer, model, device)
         return tokenizer, model, device
 
     def _load_external_glossary(self) -> List[Tuple[str, str]]:
-        glossary_path = Path("configs/terminology_en_ru.json")
+        glossary_path = self.project_root / "configs/terminology_en_ru.json"
         if not glossary_path.exists():
             return []
         try:
@@ -581,16 +614,24 @@ class TranslatorService:
         for pattern, replacement in glossary:
             def _sub_fn(s: str):
                 return re.subn(pattern, replacement, s, flags=flags)
-            updated, count = self._apply_outside_code_blocks_with_count(updated, _sub_fn)
+            updated, count = self._apply_outside_code_blocks_with_count(
+                updated,
+                _sub_fn,
+                skip_markdown_structured=True,
+            )
             replacements += count
         for pattern, replacement in corrections:
             def _sub_fn2(s: str):
                 return re.subn(pattern, replacement, s, flags=flags)
-            updated, count = self._apply_outside_code_blocks_with_count(updated, _sub_fn2)
+            updated, count = self._apply_outside_code_blocks_with_count(
+                updated,
+                _sub_fn2,
+                skip_markdown_structured=True,
+            )
             replacements += count
         return updated, replacements
 
-    def _apply_outside_code_blocks_with_count(self, text: str, fn) -> Tuple[str, int]:
+    def _apply_outside_code_blocks_with_count(self, text: str, fn, skip_markdown_structured: bool = False) -> Tuple[str, int]:
         parts = re.split(r"(```[\s\S]*?```)", text)
         out: List[str] = []
         total = 0
@@ -598,9 +639,21 @@ class TranslatorService:
             if part.startswith("```") and part.endswith("```"):
                 out.append(part)
                 continue
-            replaced, count = fn(part)
-            out.append(replaced)
-            total += count
+            if not skip_markdown_structured:
+                replaced, count = fn(part)
+                out.append(replaced)
+                total += count
+                continue
+
+            transformed_lines: List[str] = []
+            for line in part.splitlines(keepends=True):
+                if re.match(r"^\s*#{1,6}\s", line) or re.match(r"^\s*[-*+]\s", line) or re.match(r"^\s*\d+\.\s", line):
+                    transformed_lines.append(line)
+                    continue
+                replaced_line, count_line = fn(line)
+                transformed_lines.append(replaced_line)
+                total += count_line
+            out.append("".join(transformed_lines))
         return "".join(out), total
 
     def _apply_source_guided_rules(self, source_text: str, translated_text: str, direction: str) -> Tuple[str, int]:
@@ -755,6 +808,12 @@ class TranslatorService:
         restored = self._reintegrate_detached_path_tokens(restored, placeholders)
         restored = self._ensure_all_protected_tokens(restored, placeholders)
         restored = self._apply_fluency_repairs(restored, direction)
+        restored = self._restore_source_inline_json_tokens(source_text, restored)
+        restored = self._restore_source_pattern_snippets(source_text, restored, self.CLI_INLINE_RE)
+        restored = self._restore_source_pattern_snippets(source_text, restored, self.PATH_RE)
+        restored = self._restore_source_pattern_snippets(source_text, restored, self.JSON_XML_RE)
+        restored = self._restore_source_inline_code_snippets(source_text, restored)
+        restored = self._restore_source_locked_inline_snippets(source_text, restored)
         restored, source_guided_replacements = self._apply_source_guided_rules(source_text, restored, direction)
         restored, glossary_replacements_post = self._apply_glossary(restored, direction)
         term_fixed, terminology_replacements = self._apply_terminology_pass(source_text, restored, direction)
@@ -799,6 +858,14 @@ class TranslatorService:
         updated = re.sub(r"\bБэкенд должен\b", "бэкенд должен", updated)
         updated = re.sub(r"Путь к конфигу:\s*(`[^`]+`)\s+Путь к чекпоинту:", r"Путь к конфигу: \1\nПуть к чекпоинту:", updated)
         updated = re.sub(r",\s*такие,\s*как", ", такие как", updated)
+        updated = re.sub(r"(?m)^###\s*деплой\s*Notes\s*$", "### Заметки по деплою", updated, flags=re.IGNORECASE)
+        # Recover collapsed markdown list after a heading:
+        # "### Header - item1 - item2" -> multiline heading + bullets.
+        updated = re.sub(
+            r"(?m)^(#{1,6}\s[^\n]+?)\s+-\s+([^\n]+)$",
+            lambda m: self._expand_collapsed_markdown_list_line(m.group(1), m.group(2)),
+            updated,
+        )
         # If endpoint appears as a detached single line token, attach it back to POST request phrase.
         detached = re.search(r"(?m)^\s*`(/[^`\n]+)`\s*$", updated)
         if detached:
@@ -807,6 +874,106 @@ class TranslatorService:
                 updated = updated.replace("запрос HTTP `POST`", f"запрос HTTP `POST` на `{path_token}`", 1)
             updated = re.sub(rf"\n\s*`{re.escape(path_token)}`\s*\n", "\n", updated, count=1)
         return updated
+
+    def _expand_collapsed_markdown_list_line(self, header: str, tail: str) -> str:
+        parts = [p.strip() for p in re.split(r"\s+-\s+", tail) if p.strip()]
+        if len(parts) < 2:
+            return f"{header} - {tail}"
+        bullets = "\n".join(f"- {item}" for item in parts)
+        return f"{header}\n{bullets}"
+
+    def _restore_source_locked_inline_snippets(self, source_text: str, translated_text: str) -> str:
+        updated = translated_text
+        updated = self._restore_inline_snippet_group(self.INLINE_JSON_RE, source_text, updated)
+        updated = self._restore_inline_snippet_group(self.INLINE_XML_RE, source_text, updated)
+        return updated
+
+    def _restore_source_inline_json_tokens(self, source_text: str, translated_text: str) -> str:
+        source_json = self.INLINE_JSON_RE.findall(source_text)
+        if not source_json:
+            return translated_text
+
+        target_json = self.INLINE_JSON_RE.findall(translated_text)
+        restored = translated_text
+
+        if not target_json:
+            for snippet in source_json:
+                if snippet not in restored:
+                    restored = f"{restored.rstrip()} {snippet}".rstrip()
+            return restored
+
+        if len(source_json) == 1:
+            canonical = source_json[0]
+            for snippet in target_json:
+                if snippet != canonical:
+                    restored = restored.replace(snippet, canonical, 1)
+        else:
+            for src_snippet, tgt_snippet in zip(source_json, target_json):
+                if src_snippet != tgt_snippet:
+                    restored = restored.replace(tgt_snippet, src_snippet, 1)
+
+        for snippet in source_json:
+            if snippet not in restored:
+                restored = f"{restored.rstrip()} {snippet}".rstrip()
+        return restored
+
+    def _restore_source_pattern_snippets(self, source_text: str, translated_text: str, pattern: re.Pattern) -> str:
+        source_items = [m.group(0).strip() for m in pattern.finditer(source_text) if m.group(0).strip()]
+        if not source_items:
+            return translated_text
+        target_items = [m.group(0).strip() for m in pattern.finditer(translated_text) if m.group(0).strip()]
+        restored = translated_text
+
+        if not target_items:
+            for item in source_items:
+                if item not in restored:
+                    restored = f"{restored.rstrip()} {item}".rstrip()
+            return restored
+
+        for src_item, tgt_item in zip(source_items, target_items):
+            if src_item != tgt_item:
+                restored = restored.replace(tgt_item, src_item, 1)
+
+        for item in source_items:
+            if item not in restored:
+                restored = f"{restored.rstrip()} {item}".rstrip()
+        return restored
+
+    def _restore_source_inline_code_snippets(self, source_text: str, translated_text: str) -> str:
+        source_snippets = self.INLINE_CODE_RE.findall(source_text)
+        if not source_snippets:
+            return translated_text
+
+        target_snippets = self.INLINE_CODE_RE.findall(translated_text)
+        restored = translated_text
+
+        if not target_snippets:
+            for snippet in source_snippets:
+                if snippet not in restored:
+                    restored = f"{restored.rstrip()} {snippet}".rstrip()
+            return restored
+
+        for src_snippet, tgt_snippet in zip(source_snippets, target_snippets):
+            if src_snippet != tgt_snippet:
+                restored = restored.replace(tgt_snippet, src_snippet, 1)
+        return restored
+
+    def _restore_inline_snippet_group(self, pattern: re.Pattern, source_text: str, translated_text: str) -> str:
+        source_snippets = pattern.findall(source_text)
+        if not source_snippets:
+            return translated_text
+        target_snippets = pattern.findall(translated_text)
+        if not target_snippets:
+            restored = translated_text
+            for snippet in source_snippets:
+                if snippet not in restored:
+                    restored = f"{restored.rstrip()} {snippet}".rstrip()
+            return restored
+        restored = translated_text
+        for src_snippet, tgt_snippet in zip(source_snippets, target_snippets):
+            if src_snippet != tgt_snippet:
+                restored = restored.replace(tgt_snippet, src_snippet, 1)
+        return restored
 
     def _normalize_outside_code_blocks(self, text: str, fn) -> str:
         parts = re.split(r"(```[\s\S]*?```)", text)
@@ -908,6 +1075,9 @@ class TranslatorService:
         return {"passed": len(issues) == 0, "issues": issues}
 
     def _chunk_text(self, text: str, chunk_size_chars: int) -> List[str]:
+        if len(text) <= chunk_size_chars:
+            return [text]
+
         # Prefer paragraph-aware chunking for markdown/technical docs even when text is short.
         if text.count("\n") >= 3:
             parts = text.split("\n\n")
@@ -922,9 +1092,6 @@ class TranslatorService:
                     chunks.extend(forced)
             if chunks:
                 return chunks
-
-        if len(text) <= chunk_size_chars:
-            return [text]
 
         sentences = re.split(r"(?<=[.!?\n])\s+", text)
         chunks: List[str] = []

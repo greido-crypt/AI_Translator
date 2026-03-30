@@ -76,6 +76,7 @@ def _run_stabilization_phase(
         learning_rate=learning_rate,
         per_device_train_batch_size=base_args.per_device_train_batch_size,
         per_device_eval_batch_size=base_args.per_device_eval_batch_size,
+        dataloader_num_workers=base_args.dataloader_num_workers,
         num_train_epochs=num_epochs,
         weight_decay=base_args.weight_decay,
         warmup_ratio=min(0.03, float(base_args.warmup_ratio)),
@@ -110,6 +111,7 @@ def _predict_on_test(model, tokenizer, tokenized_test, per_device_eval_batch_siz
     args = Seq2SeqTrainingArguments(
         output_dir=output_dir,
         per_device_eval_batch_size=per_device_eval_batch_size,
+        dataloader_num_workers=0,
         predict_with_generate=True,
         do_train=False,
         do_eval=False,
@@ -154,6 +156,201 @@ def _build_report(config, split_sizes, baseline_metrics, final_metrics):
     return "\n".join(lines) + "\n"
 
 
+def _merge_log_histories(main_history, stabilization_history, main_epochs: float):
+    merged = list(main_history or [])
+    if not stabilization_history:
+        return merged
+
+    for item in stabilization_history:
+        if not isinstance(item, dict):
+            continue
+        shifted = dict(item)
+        if "epoch" in shifted and isinstance(shifted["epoch"], (int, float)):
+            shifted["epoch"] = float(shifted["epoch"]) + float(main_epochs)
+        merged.append(shifted)
+    return merged
+
+
+def _extract_epoch_losses(log_history):
+    train_bucket = {}
+    eval_points = {}
+
+    for row in log_history:
+        if not isinstance(row, dict):
+            continue
+        epoch = row.get("epoch")
+        if epoch is None:
+            continue
+        epoch_idx = max(1, int(np.ceil(float(epoch))))
+
+        if "loss" in row and "eval_loss" not in row:
+            train_bucket.setdefault(epoch_idx, []).append(float(row["loss"]))
+        if "eval_loss" in row:
+            eval_points[epoch_idx] = float(row["eval_loss"])
+
+    epochs = sorted(set(train_bucket.keys()) | set(eval_points.keys()))
+    train_losses = []
+    eval_losses = []
+    for ep in epochs:
+        values = train_bucket.get(ep, [])
+        train_losses.append(float(np.mean(values)) if values else np.nan)
+        eval_losses.append(eval_points.get(ep, np.nan))
+    return epochs, train_losses, eval_losses
+
+
+def _save_loss_plots(log_history, out_png="outputs/loss_curve_epoch.png", out_json="outputs/loss_curve_epoch.json"):
+    epochs, train_losses, eval_losses = _extract_epoch_losses(log_history)
+    payload = {
+        "epochs": epochs,
+        "train_loss": [None if np.isnan(v) else round(float(v), 6) for v in train_losses],
+        "eval_loss": [None if np.isnan(v) else round(float(v), 6) for v in eval_losses],
+    }
+    save_json(payload, out_json)
+
+    try:
+        import matplotlib.pyplot as plt
+    except Exception:
+        print(f"matplotlib is not installed. Saved numeric loss history only: {out_json}")
+        return
+
+    if not epochs:
+        print("No loss logs found to plot.")
+        return
+
+    plt.figure(figsize=(8, 5))
+    plt.plot(epochs, train_losses, marker="o", label="train_loss")
+    plt.plot(epochs, eval_losses, marker="s", label="eval_loss")
+    plt.xlabel("Epoch")
+    plt.ylabel("Loss")
+    plt.title("Training/Eval Loss by Epoch")
+    plt.grid(alpha=0.3)
+    plt.legend()
+    plt.tight_layout()
+    plt.savefig(out_png, dpi=150)
+    plt.close()
+
+
+def _extract_eval_series(log_history, metric_name: str):
+    values_by_epoch = {}
+    for row in log_history:
+        if not isinstance(row, dict):
+            continue
+        epoch = row.get("epoch")
+        if epoch is None:
+            continue
+        key = f"eval_{metric_name}"
+        if key not in row:
+            continue
+        epoch_idx = max(1, int(np.ceil(float(epoch))))
+        values_by_epoch[epoch_idx] = float(row[key])
+
+    epochs = sorted(values_by_epoch.keys())
+    values = [values_by_epoch[e] for e in epochs]
+    return epochs, values
+
+
+def _save_quality_plots(log_history, artifact_dir: str):
+    ensure_dir(artifact_dir)
+
+    metric_names = ["bleu", "chrf", "terminology_accuracy", "gen_len"]
+    payload = {}
+
+    for metric in metric_names:
+        epochs, values = _extract_eval_series(log_history, metric)
+        payload[metric] = {"epochs": epochs, "values": [round(v, 6) for v in values]}
+
+    save_json(payload, str(Path(artifact_dir) / "quality_curves_epoch.json"))
+
+    try:
+        import matplotlib.pyplot as plt
+    except Exception:
+        print(
+            f"matplotlib is not installed. Saved numeric quality history only: "
+            f"{Path(artifact_dir) / 'quality_curves_epoch.json'}"
+        )
+        return
+
+    # Plot 1: BLEU + chrF
+    bleu_epochs, bleu_values = payload["bleu"]["epochs"], payload["bleu"]["values"]
+    chrf_epochs, chrf_values = payload["chrf"]["epochs"], payload["chrf"]["values"]
+    if bleu_epochs or chrf_epochs:
+        plt.figure(figsize=(8, 5))
+        if bleu_epochs:
+            plt.plot(bleu_epochs, bleu_values, marker="o", label="eval_bleu")
+        if chrf_epochs:
+            plt.plot(chrf_epochs, chrf_values, marker="s", label="eval_chrf")
+        plt.xlabel("Epoch")
+        plt.ylabel("Score")
+        plt.title("Validation Quality by Epoch (BLEU / chrF)")
+        plt.grid(alpha=0.3)
+        plt.legend()
+        plt.tight_layout()
+        plt.savefig(str(Path(artifact_dir) / "quality_bleu_chrf_epoch.png"), dpi=150)
+        plt.close()
+
+    # Plot 2: terminology accuracy + gen_len
+    term_epochs, term_values = payload["terminology_accuracy"]["epochs"], payload["terminology_accuracy"]["values"]
+    len_epochs, len_values = payload["gen_len"]["epochs"], payload["gen_len"]["values"]
+    if term_epochs or len_epochs:
+        plt.figure(figsize=(8, 5))
+        if term_epochs:
+            plt.plot(term_epochs, term_values, marker="o", label="eval_terminology_accuracy")
+        if len_epochs:
+            plt.plot(len_epochs, len_values, marker="^", label="eval_gen_len")
+        plt.xlabel("Epoch")
+        plt.ylabel("Value")
+        plt.title("Validation Technical Metrics by Epoch")
+        plt.grid(alpha=0.3)
+        plt.legend()
+        plt.tight_layout()
+        plt.savefig(str(Path(artifact_dir) / "quality_tech_epoch.png"), dpi=150)
+        plt.close()
+
+
+def _save_summary_plot(log_history, artifact_dir: str):
+    ensure_dir(artifact_dir)
+
+    epochs_loss, train_losses, eval_losses = _extract_epoch_losses(log_history)
+    bleu_epochs, bleu_values = _extract_eval_series(log_history, "bleu")
+    chrf_epochs, chrf_values = _extract_eval_series(log_history, "chrf")
+
+    try:
+        import matplotlib.pyplot as plt
+    except Exception:
+        print("matplotlib is not installed. Skip summary plot.")
+        return
+
+    if not (epochs_loss or bleu_epochs or chrf_epochs):
+        print("No logs found for summary plot.")
+        return
+
+    fig, ax1 = plt.subplots(figsize=(10, 5.8))
+
+    if epochs_loss:
+        ax1.plot(epochs_loss, train_losses, marker="o", color="#2E86DE", label="train_loss")
+        ax1.plot(epochs_loss, eval_losses, marker="s", color="#1B4F72", label="eval_loss")
+    ax1.set_xlabel("Epoch")
+    ax1.set_ylabel("Loss")
+    ax1.grid(alpha=0.25)
+
+    ax2 = ax1.twinx()
+    if bleu_epochs:
+        ax2.plot(bleu_epochs, bleu_values, marker="^", color="#27AE60", label="eval_bleu")
+    if chrf_epochs:
+        ax2.plot(chrf_epochs, chrf_values, marker="D", color="#CA6F1E", label="eval_chrf")
+    ax2.set_ylabel("Quality Score")
+
+    lines_1, labels_1 = ax1.get_legend_handles_labels()
+    lines_2, labels_2 = ax2.get_legend_handles_labels()
+    if lines_1 or lines_2:
+        ax1.legend(lines_1 + lines_2, labels_1 + labels_2, loc="best")
+
+    plt.title("Training Summary: Loss and Translation Quality by Epoch")
+    plt.tight_layout()
+    plt.savefig(str(Path(artifact_dir) / "summary_training_dashboard.png"), dpi=160)
+    plt.close(fig)
+
+
 def main():
     parser = argparse.ArgumentParser(description="Fine-tuning script for EN->RU MT baseline")
     parser.add_argument("--config", default="configs/train_config.json", help="Path to config JSON")
@@ -162,10 +359,14 @@ def main():
     config = load_config(args.config)
     set_seed(int(config["seed"]))
 
+    artifacts_dir = str(config.get("artifacts_dir", "outputs"))
+    final_model_dir = Path(str(config.get("final_model_dir", "outputs/checkpoints/final")))
+
     if bool(config.get("force_cuda", True)):
         _assert_cuda_or_fail()
 
     ensure_dir("outputs")
+    ensure_dir(artifacts_dir)
     ensure_dir(config["output_dir"])
     ensure_dir("outputs/checkpoints")
 
@@ -182,6 +383,7 @@ def main():
         learning_rate=float(config["learning_rate"]),
         per_device_train_batch_size=int(config["per_device_train_batch_size"]),
         per_device_eval_batch_size=int(config["per_device_eval_batch_size"]),
+        dataloader_num_workers=int(config.get("dataloader_num_workers", 0)),
         num_train_epochs=float(config["num_train_epochs"]),
         weight_decay=float(config["weight_decay"]),
         warmup_ratio=float(config["warmup_ratio"]),
@@ -210,10 +412,17 @@ def main():
         **_trainer_processing_kwargs(tokenizer),
     )
 
-    trainer.train()
+    resume_from_checkpoint = config.get("resume_from_checkpoint")
+    if resume_from_checkpoint:
+        print(f"Resuming training from checkpoint: {resume_from_checkpoint}")
+        trainer.train(resume_from_checkpoint=str(resume_from_checkpoint))
+    else:
+        trainer.train()
+    main_log_history = list(trainer.state.log_history)
 
     stabilization_epochs = float(config.get("stabilization_epochs", 0.0))
     stabilization_lr = float(config.get("stabilization_learning_rate", float(config["learning_rate"]) * 0.5))
+    full_log_history = main_log_history
     if stabilization_epochs > 0:
         print(
             f"Starting stabilization phase: epochs={stabilization_epochs}, "
@@ -228,8 +437,20 @@ def main():
             num_epochs=stabilization_epochs,
             seed=int(config["seed"]),
         )
+        full_log_history = _merge_log_histories(
+            main_history=main_log_history,
+            stabilization_history=trainer.state.log_history,
+            main_epochs=float(config["num_train_epochs"]),
+        )
 
-    final_model_dir = Path("outputs/checkpoints/final")
+    _save_loss_plots(
+        full_log_history,
+        out_png=str(Path(artifacts_dir) / "loss_curve_epoch.png"),
+        out_json=str(Path(artifacts_dir) / "loss_curve_epoch.json"),
+    )
+    _save_quality_plots(full_log_history, artifact_dir=artifacts_dir)
+    _save_summary_plot(full_log_history, artifact_dir=artifacts_dir)
+
     ensure_dir(str(final_model_dir))
     trainer.save_model(str(final_model_dir))
     tokenizer.save_pretrained(str(final_model_dir))
@@ -237,7 +458,7 @@ def main():
     test_prediction = trainer.predict(tokenized_splits["test"])
     final_metrics = _extract_core_metrics(test_prediction.metrics)
     final_metrics["num_test_samples"] = len(raw_splits["test"])
-    save_json(final_metrics, "outputs/final_metrics.json")
+    save_json(final_metrics, str(Path(artifacts_dir) / "final_metrics.json"))
 
     decoded_predictions = _decode_predictions(test_prediction.predictions, tokenizer)
     final_samples = []
@@ -249,9 +470,9 @@ def main():
                 "prediction": decoded_predictions[idx].strip(),
             }
         )
-    save_json(final_samples, "outputs/final_samples.json")
+    save_json(final_samples, str(Path(artifacts_dir) / "final_samples.json"))
 
-    baseline_metrics_path = Path("outputs/baseline_metrics.json")
+    baseline_metrics_path = Path(artifacts_dir) / "baseline_metrics.json"
     if baseline_metrics_path.exists():
         baseline_metrics = load_config(str(baseline_metrics_path))
         baseline_metrics = {
@@ -265,7 +486,7 @@ def main():
             tokenizer=tokenizer,
             tokenized_test=tokenized_splits["test"],
             per_device_eval_batch_size=int(config["per_device_eval_batch_size"]),
-            output_dir="outputs/baseline_eval_tmp",
+            output_dir=str(Path(artifacts_dir) / "baseline_eval_tmp"),
         )
         baseline_core = _extract_core_metrics(baseline_pred.metrics)
         baseline_metrics = {
@@ -279,7 +500,7 @@ def main():
                 "gen_len": baseline_core["gen_len"],
                 "num_test_samples": len(raw_splits["test"]),
             },
-            "outputs/baseline_metrics.json",
+            str(Path(artifacts_dir) / "baseline_metrics.json"),
         )
 
     comparison = {
@@ -296,7 +517,7 @@ def main():
             "chrf": round(final_metrics["chrf"] - baseline_metrics["chrf"], 4),
         },
     }
-    save_json(comparison, "outputs/comparison.json")
+    save_json(comparison, str(Path(artifacts_dir) / "comparison.json"))
 
     split_sizes = {
         "train": len(raw_splits["train"]),
@@ -309,12 +530,12 @@ def main():
         baseline_metrics=baseline_metrics,
         final_metrics=final_metrics,
     )
-    Path("outputs/report.txt").write_text(report_text, encoding="utf-8")
+    Path(artifacts_dir, "report.txt").write_text(report_text, encoding="utf-8")
 
     print("Training completed.")
     print(f"Final BLEU: {final_metrics['bleu']:.4f}")
     print(f"Final chrF: {final_metrics['chrf']:.4f}")
-    print("Artifacts saved to outputs/.")
+    print(f"Artifacts saved to {artifacts_dir}/")
 
 
 if __name__ == "__main__":
